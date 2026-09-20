@@ -495,34 +495,78 @@ window.closeHistoryModal = function() {
     if (modal) modal.style.display = 'none';
 };
 
-// ===== CLEAR ALL SAVED KEYS (Device Cache) =====
-window.clearKeyHistory = function() {
-    if (allGeneratedKeys.length === 0 && userKeysArray.length === 0) {
-        showToast('Nothing to clear');
+// ===== CLEAR ONLY EXPIRED KEYS (Device Cache) =====
+function isHistoryKeyExpired(item) {
+    if (item.duration === 99999) return false;
+    const expiry = item.createdAt + (item.duration * 60 * 60 * 1000);
+    return expiry < Date.now();
+}
+function isDashboardKeyExpired(key) {
+    const data = firebaseDataCache[key];
+    if (!data) return false;
+    if (data.expiredOffline) return true;
+    if (data.durationHours === 99999) return false;
+    const expiry = (data.createdAt || 0) + (data.durationHours * 60 * 60 * 1000);
+    return Date.now() > expiry;
+}
+function renderHistoryList() {
+    const list = document.getElementById('historyList');
+    if (!list) return;
+    list.innerHTML = '';
+    if (allGeneratedKeys.length === 0) {
+        list.innerHTML = '<div class="empty-state">No keys generated yet</div>';
         return;
     }
-    if (!confirm('Clear ALL saved keys from this device?')) return;
+    allGeneratedKeys.slice().reverse().forEach(item => {
+        const isActive = userKeysArray.includes(item.key);
+        const div = document.createElement('div');
+        div.className = 'history-item';
+        div.innerHTML = `
+            <div class="history-key">${item.key}</div>
+            <div class="history-meta">${item.type} | ${item.duration === 99999 ? 'Lifetime' : item.duration + 'h'} | ${isActive ? 'Active' : 'Inactive'}</div>
+        `;
+        div.onclick = () => copyText(item.key);
+        list.appendChild(div);
+    });
+}
 
-    localStorage.removeItem('ph_dashboard_keys');
-    localStorage.removeItem('ph_gen_timestamps');
-    localStorage.removeItem('ph_all_keys');
-    userKeysArray = [];
-    genTimestamps = [];
-    allGeneratedKeys = [];
-    firebaseDataCache = {};
+window.clearKeyHistory = function() {
+    const beforeCount = allGeneratedKeys.length + userKeysArray.length;
+
+    allGeneratedKeys = allGeneratedKeys.filter(item => !isHistoryKeyExpired(item));
+    userKeysArray = userKeysArray.filter(key => !isDashboardKeyExpired(key));
+
+    const cleared = beforeCount - (allGeneratedKeys.length + userKeysArray.length);
+    if (cleared === 0) {
+        showToast('No expired keys found');
+        return;
+    }
+    if (!confirm(`Clear ${cleared} EXPIRED key${cleared > 1 ? 's' : ''}? Active & Lifetime keys will remain.`)) return;
+
+    Object.keys(firebaseDataCache).forEach(key => {
+        if (!userKeysArray.includes(key)) delete firebaseDataCache[key];
+    });
+
+    safeSet('ph_all_keys', allGeneratedKeys);
+    safeSet('ph_dashboard_keys', userKeysArray);
 
     const container = document.getElementById('keysContainer');
     const emptyState = document.getElementById('emptyState');
     const historyLoader = document.getElementById('historyLoader');
-    const list = document.getElementById('historyList');
 
-    if (container) { container.innerHTML = ''; container.style.display = 'none'; }
-    if (historyLoader) historyLoader.style.display = 'none';
-    if (emptyState) emptyState.style.display = 'block';
-    if (list) list.innerHTML = '<div class="empty-state">No keys generated yet</div>';
+    if (userKeysArray.length > 0) {
+        if (historyLoader) historyLoader.style.display = 'none';
+        if (emptyState) emptyState.style.display = 'none';
+        if (container) { container.style.display = 'flex'; renderDashboardUI(); }
+    } else {
+        if (container) { container.innerHTML = ''; container.style.display = 'none'; }
+        if (historyLoader) historyLoader.style.display = 'none';
+        if (emptyState) emptyState.style.display = 'block';
+    }
 
+    renderHistoryList();
     updateLimitsDisplay();
-    showToast('All saved keys cleared!');
+    showToast(`${cleared} expired key${cleared > 1 ? 's' : ''} cleared!`);
 };
 
 // ===== CLEANUP =====
